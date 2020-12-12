@@ -46,9 +46,9 @@ class PDFFindBar {
       this.toggle();
     });
 
-    this.findField.addEventListener("input", () => {
-      this.dispatchEvent("");
-    });
+    // this.findField.addEventListener("input", () => {
+    //   this.dispatchEvent("");
+    // });
 
     this.bar.addEventListener("keydown", e => {
       switch (e.keyCode) {
@@ -91,6 +91,7 @@ class PDFFindBar {
   }
 
   dispatchEvent(type, findPrev) {
+    console.log(this, this.findField.value);
     this.eventBus.dispatch("find", {
       source: this,
       type,

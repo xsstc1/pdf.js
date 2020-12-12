@@ -44,6 +44,10 @@ const CHARACTERS_TO_NORMALIZE = {
 
 let normalizationRegex = null;
 function normalize(text) {
+  if (Array.isArray(text)) {
+    console.log("text", text);
+    text = text.join(",");
+  }
   if (!normalizationRegex) {
     // Compile the regular expression for text normalization once.
     const replace = Object.keys(CHARACTERS_TO_NORMALIZE).join("");
@@ -144,7 +148,9 @@ class PDFFindController {
         clearTimeout(this._findTimeout);
         this._findTimeout = null;
       }
+      console.log("111", this);
       if (cmd === "find") {
+        console.log("111", this);
         // Trigger the find action with a small delay to avoid starting the
         // search when the user is still typing (saving resources).
         this._findTimeout = setTimeout(() => {
@@ -276,10 +282,13 @@ class PDFFindController {
    * example, "tamed tame" or "this is"). It looks for intersecting terms in
    * the `matches` and keeps elements with a longer match length.
    */
-  _prepareMatches(matchesWithLength, matches, matchesLength) {
+  _prepareMatches(matchesWithLength, matches, matchesLength, pageIndex) {
     function isSubTerm(currentIndex) {
       const currentElem = matchesWithLength[currentIndex];
       const nextElem = matchesWithLength[currentIndex + 1];
+
+      console.log("currentElem", currentElem);
+      console.log("nextElem", nextElem);
 
       // Check for cases like "TAMEd TAME".
       if (
@@ -317,13 +326,19 @@ class PDFFindController {
         ? a.matchLength - b.matchLength
         : a.match - b.match;
     });
-    for (let i = 0, len = matchesWithLength.length; i < len; i++) {
-      if (isSubTerm(i)) {
-        continue;
-      }
-      matches.push(matchesWithLength[i].match);
-      matchesLength.push(matchesWithLength[i].matchLength);
+    console.log("matchesWithLength", matchesWithLength, pageIndex);
+    if (pageIndex === 0) { // 对第几页的第几条高亮
+      matches.push(matchesWithLength[0].match);
+      matchesLength.push(matchesWithLength[0].matchLength);
     }
+
+    // for (let i = 0, len = matchesWithLength.length; i < len; i++) {
+    //   if (isSubTerm(i)) {
+    //     continue;
+    //   }
+    //   matches.push(matchesWithLength[i].match);
+    //   matchesLength.push(matchesWithLength[i].matchLength);
+    // }
   }
 
   /**
@@ -368,83 +383,116 @@ class PDFFindController {
   }
 
   _calculateWordMatch(query, pageIndex, pageContent, entireWord) {
-    const matchesWithLength = [];
-
+    let matchesWithLength = [];
     // Divide the query into pieces and search for text in each piece.
-    const queryArray = query.match(/\S+/g);
-    for (let i = 0, len = queryArray.length; i < len; i++) {
-      const subquery = queryArray[i];
-      const subqueryLen = subquery.length;
+    // 把搜索的词分开，然后搜索分开的词，最小单位为字母
+    // query.match 清除了搜索值的空格，返回了一个有着被搜索词的数组
+    // 例：hello world -->"hello","world"
+    let test_query = query;
 
-      let matchIdx = -subqueryLen;
-      while (true) {
-        matchIdx = pageContent.indexOf(subquery, matchIdx + subqueryLen);
-        if (matchIdx === -1) {
-          break;
+    for (let x = 0; x < test_query.length; x++) {
+      // 只有在这里才可以给段落设置一个sign,后面我才能进行匹配，滚动到该段落位置
+      let queryArray = test_query[x].match(/\S+/g); // '/S':任何一个非空白字符
+      for (let i = 0, len = queryArray.length; i < len; i++) {
+        // 若果是英文单词，就是单个字母的循环
+        let subquery = queryArray[i];
+        let subqueryLen = subquery.length;
+        let matchIdx = -subqueryLen; // 这里设为负数是什么意思
+        while (true) {
+          // matchInd+subqueryLen  == 0:为开始查找的位置
+          // matchIdx 为返回的匹配的的位置
+          matchIdx = pageContent.indexOf(subquery, matchIdx + subqueryLen);
+          if (matchIdx === -1) {
+            // 说明没有匹配到
+            break;
+          }
+          // Other searches do not, so we store the length.
+          matchesWithLength.push({
+            // 将搜索的索引存到 matchesWithLength里
+            match: matchIdx,
+            matchLength: subqueryLen,
+            skipped: false,
+          });
         }
-        if (
-          entireWord &&
-          !this._isEntireWord(pageContent, matchIdx, subqueryLen)
-        ) {
-          continue;
-        }
-        // Other searches do not, so we store the length.
-        matchesWithLength.push({
-          match: matchIdx,
-          matchLength: subqueryLen,
-          skipped: false,
-        });
       }
     }
 
     // Prepare arrays for storing the matches.
-    this._pageMatchesLength[pageIndex] = [];
-    this._pageMatches[pageIndex] = [];
+    if (!this.pageMatchesLength) {
+      this.pageMatchesLength = []; // 清空这个要存储的数组
+    }
+    this.pageMatchesLength[pageIndex] = []; // 某一页的匹配结果，存到每一页上
+    this.pageMatches[pageIndex] = [];
 
     // Sort `matchesWithLength`, remove intersecting terms and put the result
     // into the two arrays.
+    // this.pageMatches[pageIndex] 存索引
+    // this.pageMatchesLength[pageIndex] 存对应的长度
+    // 还是和phrase一样，pageMatches用来存索引
     this._prepareMatches(
       matchesWithLength,
-      this._pageMatches[pageIndex],
-      this._pageMatchesLength[pageIndex]
+      this.pageMatches[pageIndex],
+      this.pageMatchesLength[pageIndex],
+      pageIndex
     );
   }
 
   _calculateMatch(pageIndex) {
-    let pageContent = this._pageContents[pageIndex];
-    let query = this._query;
-    const { caseSensitive, entireWord, phraseSearch } = this._state;
+    // return 来获取想要的值
+    // _normalize应该是规范化的意思
+    let pageContent = normalize(this._pageContents[pageIndex]);
+    let query_words = this.state.query;
 
-    if (query.length === 0) {
+    for (let i = 0; i < query_words.length; i++) {
+      query_words[i] = normalize(query_words[i]);
+      let caseSensitive = this.state.caseSensitive;
+
+      if (!caseSensitive) {
+        // 判断是否对大小写敏感
+        // 如果不区分大小写，就把页面内容全部转为小写
+        // 这里pagecont
+        pageContent = pageContent.toLowerCase();
+        query_words[i] = query_words[i].toLowerCase();
+      }
+    }
+    // let query = normalize(this.state.query); // 这里只传只传了一个词，我需要传多个词
+    let phraseSearch = this.state.phraseSearch;
+    // let queryLen = query.length;
+    // 查询内容为空，返回
+    if (query_words.length === 0) {
       // Do nothing: the matches should be wiped out already.
       return;
     }
-
-    if (!caseSensitive) {
-      pageContent = pageContent.toLowerCase();
-      query = query.toLowerCase();
-    }
-
+    // 不区分大小写的话
+    // 以上内容规范了当前页和查询内容的规范化
+    // 以下为真正的匹配的内容
+    // console.log("phraseSearch", phraseSearch);
+    // console.log("pageIndex", pageIndex);
+    // console.log("query_words", query_words);
+    // console.log("pageContent", pageContent);
     if (phraseSearch) {
-      this._calculatePhraseMatch(query, pageIndex, pageContent, entireWord);
+      // 若为true则可匹配整段文字
+      this._calculatePhraseMatch(query_words, pageIndex, pageContent); // 词组匹配功能
     } else {
-      this._calculateWordMatch(query, pageIndex, pageContent, entireWord);
+      // 若为false则只能匹配单个的词，特征：单个的词一般 两边有空格
+      this._calculateWordMatch(query_words, pageIndex, pageContent); // 单词匹配功能
     }
-
-    // When `highlightAll` is set, ensure that the matches on previously
-    // rendered (and still active) pages are correctly highlighted.
-    if (this._state.highlightAll) {
-      this._updatePage(pageIndex);
-    }
-    if (this._resumePageIdx === pageIndex) {
-      this._resumePageIdx = null;
-      this._nextPageMatch();
+    // 将计算的匹配结果，用来更新匹配结果
+    this._updatePage(pageIndex); // 清除以前的匹配结果，渲染最新的匹配结果
+    if (this.resumePageIdx === pageIndex) {
+      // 如果恢复的页面索引等于当前索引
+      this.resumePageIdx = null; // 将恢复页面的索引设为空
+      this._nextPageMatch(); //
     }
 
     // Update the match count.
-    const pageMatchesCount = this._pageMatches[pageIndex].length;
-    if (pageMatchesCount > 0) {
-      this._matchesCountTotal += pageMatchesCount;
+    // 更新匹配个数
+    // this.pageMatches[pageIndex]里记录了第pageIndex页匹配的关键词的位置
+    // 通过下面这样就可以获得匹配的个数了
+    // 问题：我在搜索时，没有全部高亮时，就可以显示全部匹配的单词个数
+    // 那我为什么不能全部高亮呢
+    if (this.pageMatches[pageIndex].length > 0) {
+      this.matchCount += this.pageMatches[pageIndex].length;
       this._updateUIResultsCount();
     }
   }
